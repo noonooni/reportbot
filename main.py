@@ -1,7 +1,6 @@
 import requests
+from bs4 import BeautifulSoup
 import os
-import re
-import json
 
 TOKEN = os.environ['TELEGRAM_TOKEN']
 CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
@@ -19,47 +18,55 @@ def fetch_top_5():
         }
         response = requests.get(URL, headers=headers, timeout=30)
         response.encoding = 'utf-8'
-        html_content = response.text
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 방식 1: 소스코드에 포함된 게시글 JSON 패턴을 직접 정규식으로 찾기
-        # 'title' : '게시글제목', 'url' : '링크' 형태를 찾습니다.
-        titles = re.findall(r'"title":"(.*?)"', html_content)
-        urls = re.findall(r'"url":"(.*?)"', html_content)
+        # 1. 소스코드 분석 결과: 포트폴리오 아이템의 제목 태그를 직접 찾습니다.
+        # 주신 mem.txt 소스에 있는 정확한 클래스명입니다.
+        posts = soup.find_all('div', class_='elementor-portfolio-item__title')
         
+        # 2. 만약 위 방식이 안될 경우 부모 요소를 통해 찾습니다.
+        if not posts:
+            posts = soup.select('.elementor-portfolio-item__content')
+
         post_list = []
-        for t, u in zip(titles, urls):
-            # 유니코드 깨짐 복구 및 정제
-            clean_title = t.encode().decode('unicode_escape').replace('\\/', '/')
-            clean_url = u.replace('\\/', '/')
+        for post in posts:
+            # 텍스트 추출
+            title = post.get_text().strip()
             
-            # 메뉴 항목(Research, Members 등) 제외 및 중복 제거
-            if len(clean_title) > 5 and 'snusmic.com' in clean_url:
-                if clean_title not in [p['title'] for p in post_list]:
-                    post_list.append({'title': clean_title, 'link': clean_url})
+            # 링크 추출: 보통 제목 주변의 <a> 태그에 있습니다.
+            # 부모나 자식 요소 중 <a> 태그를 탐색합니다.
+            link_tag = post.find_parent('a') or post.find('a') or post.find_previous('a')
+            
+            if link_tag:
+                link = link_tag.get('href', '')
+                if title and link.startswith('http'):
+                    post_list.append({'title': title, 'link': link})
             
             if len(post_list) >= 5: break
 
-        # 방식 2: 방식 1 실패 시, 단순히 텍스트 패턴으로 찾기
-        if not post_list:
-            # "Research - SMIC" 같이 페이지 제목 외에 실제 게시글스러운 패턴 탐색
-            pattern = re.compile(r'<a[^>]+href="(http://snusmic\.com/[^"]+)"[^>]*>(.*?)</a>')
-            matches = pattern.findall(html_content)
-            for link, title in matches:
-                title = re.sub('<[^<]+?>', '', title).strip() # 태그 제거
-                if len(title) > 10:
-                    post_list.append({'title': title, 'link': link})
-                if len(post_list) >= 5: break
-
-        # 결과 전송
+        # 3. 결과 전송
         if post_list:
-            result_text = "<b>🔍 SMIC Research 데이터 추출 성공</b>\n\n"
-            for i, post in enumerate(post_list):
-                result_text += f"{i+1}. <b>{post['title']}</b>\n🔗 {post['link']}\n\n"
+            result_text = "<b>🔍 SMIC Research 최신 게시물</b>\n\n"
+            for i, p in enumerate(post_list):
+                result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 <a href='{p['link']}'>연구 보고서 읽기</a>\n\n"
             send_message(result_text)
         else:
-            # 소스코드 일부를 로그로 출력 (디버깅용)
-            print("Page Length:", len(html_content))
-            send_message("❌ 데이터 추출에 실패했습니다. 사이트 보안이 강화되었거나 구조가 완전히 비표준입니다.")
+            # 마지막 수단: 텍스트가 있는 모든 링크 중 research가 포함된 것
+            all_links = soup.select('a[href*="/research/"]')
+            for a in all_links:
+                t = a.get_text().strip()
+                l = a.get('href', '')
+                if len(t) > 5 and t not in ['RESEARCH', 'Research']:
+                    post_list.append({'title': t, 'link': l})
+                if len(post_list) >= 5: break
+            
+            if post_list:
+                result_text = "<b>🔍 SMIC 게시물 (대체 탐색)</b>\n\n"
+                for i, p in enumerate(post_list):
+                    result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 {p['link']}\n\n"
+                send_message(result_text)
+            else:
+                send_message("❌ 최종 탐색 실패. 사이트 로딩 방식이 특이합니다.")
 
     except Exception as e:
         send_message(f"⚠️ 오류 발생: {str(e)}")
