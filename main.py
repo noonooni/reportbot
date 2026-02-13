@@ -20,53 +20,51 @@ def fetch_top_5():
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 1. 소스코드 분석 결과: 포트폴리오 아이템의 제목 태그를 직접 찾습니다.
-        # 주신 mem.txt 소스에 있는 정확한 클래스명입니다.
-        posts = soup.find_all('div', class_='elementor-portfolio-item__title')
+        # 1. 'Portfolio' 위젯의 각 아이템 덩어리를 모두 가져옵니다.
+        items = soup.select('.elementor-portfolio-item')
         
-        # 2. 만약 위 방식이 안될 경우 부모 요소를 통해 찾습니다.
-        if not posts:
-            posts = soup.select('.elementor-portfolio-item__content')
-
         post_list = []
-        for post in posts:
-            # 텍스트 추출
-            title = post.get_text().strip()
+        for item in items:
+            # 제목 추출: 제목을 담고 있는 클래스를 정밀 타겟팅합니다.
+            title_tag = item.select_one('.elementor-portfolio-item__title')
+            # 링크 추출: 아이템 자체 혹은 내부의 a 태그를 찾습니다.
+            link_tag = item.select_one('a')
             
-            # 링크 추출: 보통 제목 주변의 <a> 태그에 있습니다.
-            # 부모나 자식 요소 중 <a> 태그를 탐색합니다.
-            link_tag = post.find_parent('a') or post.find('a') or post.find_previous('a')
-            
-            if link_tag:
+            if title_tag and link_tag:
+                title = title_tag.get_text(strip=True)
                 link = link_tag.get('href', '')
-                if title and link.startswith('http'):
+                
+                # 중복 방지 및 유효성 검사
+                if title and link.startswith('http') and title not in [p['title'] for p in post_list]:
                     post_list.append({'title': title, 'link': link})
             
             if len(post_list) >= 5: break
 
-        # 3. 결과 전송
+        # 2. 결과 전송
         if post_list:
-            result_text = "<b>🔍 SMIC Research 최신 게시물</b>\n\n"
+            result_text = "<b>🔍 SMIC Research 최신 리스트</b>\n\n"
             for i, p in enumerate(post_list):
-                result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 <a href='{p['link']}'>연구 보고서 읽기</a>\n\n"
+                result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 <a href='{p['link']}'>보고서 보기</a>\n\n"
             send_message(result_text)
         else:
-            # 마지막 수단: 텍스트가 있는 모든 링크 중 research가 포함된 것
-            all_links = soup.select('a[href*="/research/"]')
-            for a in all_links:
-                t = a.get_text().strip()
-                l = a.get('href', '')
-                if len(t) > 5 and t not in ['RESEARCH', 'Research']:
-                    post_list.append({'title': t, 'link': l})
+            # 백업 모드: 클래스명이 아닌 텍스트 패턴으로 강제 탐색
+            backup_links = soup.find_all('a', href=True)
+            for a in backup_links:
+                href = a['href']
+                text = a.get_text(strip=True)
+                # 연구글일 확률이 높은 링크 패턴 필터링
+                if '/research/' in href and len(text) > 10:
+                    if text not in [p['title'] for p in post_list]:
+                        post_list.append({'title': text, 'link': href})
                 if len(post_list) >= 5: break
             
             if post_list:
-                result_text = "<b>🔍 SMIC 게시물 (대체 탐색)</b>\n\n"
+                result_text = "<b>🔍 SMIC Research (패턴 탐색 성공)</b>\n\n"
                 for i, p in enumerate(post_list):
                     result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 {p['link']}\n\n"
                 send_message(result_text)
             else:
-                send_message("❌ 최종 탐색 실패. 사이트 로딩 방식이 특이합니다.")
+                send_message("❌ 모든 시도가 실패했습니다. 사이트 로딩 구조가 일반적인 크롤링을 허용하지 않습니다.")
 
     except Exception as e:
         send_message(f"⚠️ 오류 발생: {str(e)}")
