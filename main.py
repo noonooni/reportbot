@@ -1,7 +1,7 @@
 import requests
-from bs4 import BeautifulSoup
 import os
 import re
+import json
 
 TOKEN = os.environ['TELEGRAM_TOKEN']
 CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
@@ -19,58 +19,47 @@ def fetch_top_5():
         }
         response = requests.get(URL, headers=headers, timeout=30)
         response.encoding = 'utf-8'
-        soup = BeautifulSoup(response.text, 'html.parser')
+        html_content = response.text
         
-        # 1. 모든 게시글 박스(article)를 먼저 찾습니다.
-        # 소스 분석 결과 elementor-post 클래스가 각 게시글의 단위입니다.
-        articles = soup.find_all('article', class_=re.compile(r'elementor-post'))
+        # 방식 1: 소스코드에 포함된 게시글 JSON 패턴을 직접 정규식으로 찾기
+        # 'title' : '게시글제목', 'url' : '링크' 형태를 찾습니다.
+        titles = re.findall(r'"title":"(.*?)"', html_content)
+        urls = re.findall(r'"url":"(.*?)"', html_content)
         
         post_list = []
-        
-        for article in articles:
-            # a) 제목 찾기: h3 내부의 a 태그 혹은 article 내부의 첫 번째 유의미한 a 태그
-            title_tag = article.find('h3') or article.find('a')
-            if not title_tag: continue
+        for t, u in zip(titles, urls):
+            # 유니코드 깨짐 복구 및 정제
+            clean_title = t.encode().decode('unicode_escape').replace('\\/', '/')
+            clean_url = u.replace('\\/', '/')
             
-            title = title_tag.get_text().strip()
-            link = ""
-            
-            # b) 링크 찾기
-            link_tag = article.find('a')
-            if link_tag:
-                link = link_tag.get('href', '')
-            
-            # c) 불필요한 공백이나 메뉴 방지 (제목이 4자 이상인 것만)
-            if len(title) > 3 and link.startswith('http'):
-                if title not in [p['title'] for p in post_list]:
-                    post_list.append({'title': title, 'link': link})
+            # 메뉴 항목(Research, Members 등) 제외 및 중복 제거
+            if len(clean_title) > 5 and 'snusmic.com' in clean_url:
+                if clean_title not in [p['title'] for p in post_list]:
+                    post_list.append({'title': clean_title, 'link': clean_url})
             
             if len(post_list) >= 5: break
 
-        # 2. 결과 전송
+        # 방식 2: 방식 1 실패 시, 단순히 텍스트 패턴으로 찾기
+        if not post_list:
+            # "Research - SMIC" 같이 페이지 제목 외에 실제 게시글스러운 패턴 탐색
+            pattern = re.compile(r'<a[^>]+href="(http://snusmic\.com/[^"]+)"[^>]*>(.*?)</a>')
+            matches = pattern.findall(html_content)
+            for link, title in matches:
+                title = re.sub('<[^<]+?>', '', title).strip() # 태그 제거
+                if len(title) > 10:
+                    post_list.append({'title': title, 'link': link})
+                if len(post_list) >= 5: break
+
+        # 결과 전송
         if post_list:
-            result_text = "<b>🔍 SMIC Research 최신 게시물</b>\n\n"
+            result_text = "<b>🔍 SMIC Research 데이터 추출 성공</b>\n\n"
             for i, post in enumerate(post_list):
-                result_text += f"{i+1}. <b>{post['title']}</b>\n🔗 <a href='{post['link']}'>게시글로 이동</a>\n\n"
+                result_text += f"{i+1}. <b>{post['title']}</b>\n🔗 {post['link']}\n\n"
             send_message(result_text)
         else:
-            # 3. 최후의 수단: 소스코드 내 모든 링크 중 'portfolio'나 'research' 단어가 들어간 제목 있는 링크 추출
-            all_links = soup.find_all('a')
-            for a in all_links:
-                t = a.get_text().strip()
-                l = a.get('href', '')
-                if len(t) > 10 and ('/research/' in l or '/portfolio/' in l):
-                    if t not in [p['title'] for p in post_list]:
-                        post_list.append({'title': t, 'link': l})
-                if len(post_list) >= 5: break
-            
-            if post_list:
-                result_text = "<b>🔍 SMIC 게시물 (대체 탐색 성공)</b>\n\n"
-                for i, post in enumerate(post_list):
-                    result_text += f"{i+1}. <b>{post['title']}</b>\n🔗 {post['link']}\n\n"
-                send_message(result_text)
-            else:
-                send_message("❌ 게시글 추출 실패. 사이트가 콘텐츠를 숨기고 있습니다.")
+            # 소스코드 일부를 로그로 출력 (디버깅용)
+            print("Page Length:", len(html_content))
+            send_message("❌ 데이터 추출에 실패했습니다. 사이트 보안이 강화되었거나 구조가 완전히 비표준입니다.")
 
     except Exception as e:
         send_message(f"⚠️ 오류 발생: {str(e)}")
