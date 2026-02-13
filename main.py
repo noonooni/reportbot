@@ -8,26 +8,39 @@ URL = "http://snusmic.com/research/"
 
 def send_message(text):
     api_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    params = {'chat_id': CHAT_ID, 'text': text}
-    res = requests.get(api_url, params=params)
-    print(f"전송 결과: {res.status_code}, {res.text}") # 로그 확인용
+    params = {'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
+    requests.get(api_url, params=params)
 
-def check_posts():
-    # 테스트를 위해 무조건 메시지 전송!
-    send_message("🤖 봇이 정상적으로 연결되었습니다! 이제 사이트를 감시합니다.")
-    
+def fetch_top_5():
     try:
-        response = requests.get(URL)
+        # 1. 페이지 데이터 가져오기
+        headers = {'User-Agent': 'Mozilla/5.0'} # 차단 방지용 헤더
+        response = requests.get(URL, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 실제 사이트 제목 태그 추출 (사이트마다 다름)
-        # snusmic.com은 보통 <h3> 이나 특정 클래스를 사용함
-        post = soup.select_one('h3') # 임시로 h3 태그 확인
-        if post:
-            current_title = post.text.strip()
-            print(f"가져온 제목: {current_title}")
+        # 2. 게시글 목록 찾기 
+        # snusmic 사이트는 보통 'article' 태그나 'entry-title' 클래스를 사용합니다.
+        posts = soup.select('h3.elementor-post__title a') # elementor 라이브러리 사용 시 흔한 구조
+        
+        if not posts:
+            # 위 구조가 아닐 경우를 대비한 2차 시도 (일반적인 워드프레스 구조)
+            posts = soup.select('.entry-title a')
+
+        result_text = "🔍 *현재 홈페이지 최근 5개 게시물*\n\n"
+        
+        # 3. 상위 5개만 추출
+        for i, post in enumerate(posts[:5]):
+            title = post.text.strip()
+            link = post.get('href')
+            result_text += f"{i+1}. [{title}]({link})\n\n"
+        
+        if not posts:
+            result_text = "❌ 게시물을 찾지 못했습니다. 사이트 구조를 다시 확인해야 합니다."
+            
+        send_message(result_text)
+        
     except Exception as e:
-        print(f"오류: {e}")
+        send_message(f"⚠️ 오류 발생: {str(e)}")
 
 if __name__ == "__main__":
-    check_posts()
+    fetch_top_5()
