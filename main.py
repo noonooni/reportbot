@@ -1,10 +1,12 @@
 import requests
-from bs4 import BeautifulSoup
 import os
 
 TOKEN = os.environ['TELEGRAM_TOKEN']
 CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
-URL = "http://snusmic.com/research/"
+
+# 실제 데이터가 오가는 통로 (API 주소)
+# 이 주소는 서버에서 게시글 데이터를 직접 받아오는 경로입니다.
+API_URL = "http://snusmic.com/wp-admin/admin-ajax.php"
 
 def send_message(text):
     api_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -13,58 +15,41 @@ def send_message(text):
 
 def fetch_top_5():
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        # 서버에 게시글 목록을 달라고 보내는 요청 데이터
+        data = {
+            'action': 'elementor_pro_forms_send_form', # 또는 엘리멘터 쿼리 액션
+            'action': 'elementor_v2_posts_load_more', 
+            # 일반적인 접근이 막힐 경우를 대비해 쿼리 파라미터를 구성하거나 
+            # 공개된 다른 API 경로를 시도합니다.
         }
-        response = requests.get(URL, headers=headers, timeout=30)
-        response.encoding = 'utf-8'
-        soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 1. 'Portfolio' 위젯의 각 아이템 덩어리를 모두 가져옵니다.
-        items = soup.select('.elementor-portfolio-item')
+        # 하지만 가장 확실한 방법은 RSS 피드를 사용하는 것입니다.
+        # 워드프레스 사이트인 snusmic.com은 표준 RSS를 지원합니다.
+        feed_url = "http://snusmic.com/feed/"
+        
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(feed_url, headers=headers, timeout=30)
+        
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(response.text, 'xml') # XML 파서 사용
+        
+        items = soup.find_all('item')
         
         post_list = []
         for item in items:
-            # 제목 추출: 제목을 담고 있는 클래스를 정밀 타겟팅합니다.
-            title_tag = item.select_one('.elementor-portfolio-item__title')
-            # 링크 추출: 아이템 자체 혹은 내부의 a 태그를 찾습니다.
-            link_tag = item.select_one('a')
-            
-            if title_tag and link_tag:
-                title = title_tag.get_text(strip=True)
-                link = link_tag.get('href', '')
-                
-                # 중복 방지 및 유효성 검사
-                if title and link.startswith('http') and title not in [p['title'] for p in post_list]:
-                    post_list.append({'title': title, 'link': link})
-            
+            title = item.title.text
+            link = item.link.text
+            # 연구글 카테고리나 특정 키워드 필터링 (선택 사항)
+            post_list.append({'title': title, 'link': link})
             if len(post_list) >= 5: break
 
-        # 2. 결과 전송
         if post_list:
-            result_text = "<b>🔍 SMIC Research 최신 리스트</b>\n\n"
+            result_text = "<b>✅ SMIC 최신 연구 리스트 (RSS 추출)</b>\n\n"
             for i, p in enumerate(post_list):
-                result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 <a href='{p['link']}'>보고서 보기</a>\n\n"
+                result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 <a href='{p['link']}'>보고서 읽기</a>\n\n"
             send_message(result_text)
         else:
-            # 백업 모드: 클래스명이 아닌 텍스트 패턴으로 강제 탐색
-            backup_links = soup.find_all('a', href=True)
-            for a in backup_links:
-                href = a['href']
-                text = a.get_text(strip=True)
-                # 연구글일 확률이 높은 링크 패턴 필터링
-                if '/research/' in href and len(text) > 10:
-                    if text not in [p['title'] for p in post_list]:
-                        post_list.append({'title': text, 'link': href})
-                if len(post_list) >= 5: break
-            
-            if post_list:
-                result_text = "<b>🔍 SMIC Research (패턴 탐색 성공)</b>\n\n"
-                for i, p in enumerate(post_list):
-                    result_text += f"{i+1}. <b>{p['title']}</b>\n🔗 {p['link']}\n\n"
-                send_message(result_text)
-            else:
-                send_message("❌ 모든 시도가 실패했습니다. 사이트 로딩 구조가 일반적인 크롤링을 허용하지 않습니다.")
+            send_message("❌ RSS 피드에서도 글을 찾을 수 없습니다.")
 
     except Exception as e:
         send_message(f"⚠️ 오류 발생: {str(e)}")
